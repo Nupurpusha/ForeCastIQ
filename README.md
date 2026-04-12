@@ -645,7 +645,7 @@ flowchart TD
 ### 1️⃣ Clone the Repository
 
 ```bash
-https://github.com/Nupurpusha/-ForeCastIQ
+git clone https://github.com/Nupurpusha/-ForeCastIQ.git
 cd ForecastIQ
 ```
 
