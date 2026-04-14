@@ -125,7 +125,7 @@ Authentication exists in the codebase but is not required to use the platform.
 ### Step 1 — Clone the repository
 
 ```bash
-git clone https://github.com/your-username/forecastiq.git
+git clone https://github.com/Nupurpusha/ForeCastiq.git
 cd forecastiq
 ```
 
