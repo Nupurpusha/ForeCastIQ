@@ -19,11 +19,15 @@ import {
   runForecast,
   runAnomalyDetection,
   runScenario,
+  runCleanedForecast,
   ForecastResponse,
   AnomalyResponse,
   ScenarioResponse,
+  CleanedForecastResponse,
   ForecastPoint,
   HistoryItem,
+  SCENARIO_SYSTEM_MESSAGE,
+  type Message,
 } from "@/lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -40,12 +44,19 @@ interface DataContextValue {
   csvData: CsvData | null;
   setCsvData: (data: CsvData | null) => void;
   isUsingDemo: boolean;
+  scenarioChatKey: number;
 
   // Forecast
   forecastResult: ForecastResponse | null;
   forecastLoading: boolean;
   forecastError: string | null;
-  fetchForecast: () => Promise<void>;
+  fetchForecast: (periods?: number) => Promise<void>;
+
+  // Cleaned Forecast (outlier comparison)
+  cleanedForecastResult: CleanedForecastResponse | null;
+  cleanedForecastLoading: boolean;
+  cleanedForecastError: string | null;
+  fetchCleanedForecast: (periods?: number) => Promise<void>;
 
   // Anomaly
   anomalyResult: AnomalyResponse | null;
@@ -61,6 +72,14 @@ interface DataContextValue {
     question: string,
     history: HistoryItem[]
   ) => Promise<ScenarioResponse | null>;
+
+  // Scenario chat state (persists across navigation)
+  scenarioMessages: Message[];
+  setScenarioMessages: (value: Message[] | ((prev: Message[]) => Message[])) => void;
+  scenarioChartData: { week: string; baseline: number; scenario: number }[] | null;
+  setScenarioChartData: (value: { week: string; baseline: number; scenario: number }[] | null | ((prev: { week: string; baseline: number; scenario: number }[] | null) => { week: string; baseline: number; scenario: number }[] | null)) => void;
+  scenarioTotalDelta: number;
+  setScenarioTotalDelta: (value: number | ((prev: number) => number)) => void;
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────
@@ -69,10 +88,15 @@ const DataContext = createContext<DataContextValue | null>(null);
 
 export function DataProvider({ children }: { children: ReactNode }) {
   const [csvData, setCsvDataState] = useState<CsvData | null>(null);
+  const [scenarioChatKey, setScenarioChatKey] = useState(0);
 
   const [forecastResult, setForecastResult] = useState<ForecastResponse | null>(null);
   const [forecastLoading, setForecastLoading] = useState(false);
   const [forecastError, setForecastError] = useState<string | null>(null);
+
+  const [cleanedForecastResult, setCleanedForecastResult] = useState<CleanedForecastResponse | null>(null);
+  const [cleanedForecastLoading, setCleanedForecastLoading] = useState(false);
+  const [cleanedForecastError, setCleanedForecastError] = useState<string | null>(null);
 
   const [anomalyResult, setAnomalyResult] = useState<AnomalyResponse | null>(null);
   const [anomalyLoading, setAnomalyLoading] = useState(false);
@@ -82,15 +106,38 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioError, setScenarioError] = useState<string | null>(null);
 
+  // Scenario chat state (persists across navigation)
+  const [scenarioMessages, setScenarioMessagesState] = useState<Message[]>([SCENARIO_SYSTEM_MESSAGE]);
+  const [scenarioChartData, setScenarioChartDataState] = useState<{ week: string; baseline: number; scenario: number }[] | null>(null);
+  const [scenarioTotalDelta, setScenarioTotalDeltaState] = useState<number>(0);
+
+  // Wrappers that support both direct values and function updaters
+  const setScenarioMessages = useCallback((value: Message[] | ((prev: Message[]) => Message[])) => {
+    setScenarioMessagesState((prev) => value instanceof Function ? value(prev) : value);
+  }, []);
+
+  const setScenarioChartData = useCallback((value: { week: string; baseline: number; scenario: number }[] | null | ((prev: { week: string; baseline: number; scenario: number }[] | null) => { week: string; baseline: number; scenario: number }[] | null)) => {
+    setScenarioChartDataState((prev) => value instanceof Function ? value(prev) : value);
+  }, []);
+
+  const setScenarioTotalDelta = useCallback((value: number | ((prev: number) => number)) => {
+    setScenarioTotalDeltaState((prev) => value instanceof Function ? value(prev) : value);
+  }, []);
+
   const setCsvData = useCallback((data: CsvData | null) => {
     setCsvDataState(data);
     // Clear cached results when data source changes
     setForecastResult(null);
     setAnomalyResult(null);
     setScenarioResult(null);
+    setCleanedForecastResult(null);
+    setScenarioMessagesState([SCENARIO_SYSTEM_MESSAGE]);
+    setScenarioChartDataState(null);
+    setScenarioTotalDeltaState(0);
+    setScenarioChatKey((prev) => prev + 1);
   }, []);
 
-  const fetchForecast = useCallback(async () => {
+  const fetchForecast = useCallback(async (periods: number = 4) => {
     setForecastLoading(true);
     setForecastError(null);
     try {
@@ -100,14 +147,37 @@ export function DataProvider({ children }: { children: ReactNode }) {
               data: csvData.rows,
               dateColumn: csvData.dateColumn,
               valueColumn: csvData.valueColumn,
+              periods,
             }
-          : { useDemo: true }
+          : { useDemo: true, periods }
       );
       setForecastResult(result);
     } catch (err) {
       setForecastError(err instanceof Error ? err.message : "Forecast failed.");
     } finally {
       setForecastLoading(false);
+    }
+  }, [csvData]);
+
+  const fetchCleanedForecast = useCallback(async (periods: number = 4) => {
+    setCleanedForecastLoading(true);
+    setCleanedForecastError(null);
+    try {
+      const result = await runCleanedForecast(
+        csvData
+          ? {
+              data: csvData.rows,
+              dateColumn: csvData.dateColumn,
+              valueColumn: csvData.valueColumn,
+              periods,
+            }
+          : { useDemo: true, periods }
+      );
+      setCleanedForecastResult(result);
+    } catch (err) {
+      setCleanedForecastError(err instanceof Error ? err.message : "Cleaned forecast failed.");
+    } finally {
+      setCleanedForecastLoading(false);
     }
   }, [csvData]);
 
@@ -179,10 +249,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
         csvData,
         setCsvData,
         isUsingDemo: csvData === null,
+        scenarioChatKey,
         forecastResult,
         forecastLoading,
         forecastError,
         fetchForecast,
+        cleanedForecastResult,
+        cleanedForecastLoading,
+        cleanedForecastError,
+        fetchCleanedForecast,
         anomalyResult,
         anomalyLoading,
         anomalyError,
@@ -191,6 +266,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
         scenarioLoading,
         scenarioError,
         fetchScenario,
+        scenarioMessages,
+        setScenarioMessages,
+        scenarioChartData,
+        setScenarioChartData,
+        scenarioTotalDelta,
+        setScenarioTotalDelta,
       }}
     >
       {children}

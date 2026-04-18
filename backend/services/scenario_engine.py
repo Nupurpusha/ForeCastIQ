@@ -107,9 +107,44 @@ def _is_remove_outliers(question: str) -> bool:
 
 # ── Numeric helpers ───────────────────────────────────────────────────────────
 
-def extract_percentage(question: str) -> float:
-    match = re.search(r"(\d+(?:\.\d+)?)\s*%", question)
-    return float(match.group(1)) / 100 if match else 0.0
+def extract_percentage(question: str) -> float | None:
+    """
+    Extract percentage from question in multiple formats.
+    Returns None if no percentage found (caller should use default).
+    """
+    q = question.lower()
+
+    # 1. Literal % — "10%", "10.5%"
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", q)
+    if match:
+        return float(match.group(1)) / 100
+
+    # 2. Word "percent" / "pct" — "10 percent", "10pct", "ten percent"
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(?:percent|pct)", q)
+    if match:
+        return float(match.group(1)) / 100
+
+    # 3. Number words 1-20 — "ten percent", "five percent"
+    word_to_num = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+        "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+    }
+    for word, num in word_to_num.items():
+        if re.search(rf"{word}\s*(?:percent|pct)", q):
+            return num / 100
+
+    # 4. Word multipliers — "double", "triple", "half", "halve"
+    if "double" in q or "twice" in q:
+        return 1.0  # 100% increase
+    if "triple" in q:
+        return 2.0  # 200% increase
+    if "half" in q or "halve" in q:
+        return 0.5  # 50% decrease
+
+    # No percentage found
+    return None
 
 
 def detect_intent(question: str) -> str:
@@ -121,11 +156,11 @@ def detect_intent(question: str) -> str:
     return "neutral"
 
 
-def extract_duration(question: str) -> int:
+def extract_duration(question: str, max_periods: int = 4) -> int:
     match = re.search(r"(\d+)\s*(week|weeks)", question.lower())
     if match:
-        return min(int(match.group(1)), 4)
-    return 4
+        return min(int(match.group(1)), max_periods)
+    return max_periods
 
 
 # ── Special scenario calculators ──────────────────────────────────────────────
@@ -205,6 +240,7 @@ def apply_scenario(
     baseline_forecast: List[Dict[str, Any]],
     question: str,
     historical: Optional[List[Dict[str, Any]]] = None,
+    max_periods: int = 4,
 ) -> Dict[str, Any]:
     """
     Main scenario engine.
@@ -216,6 +252,7 @@ def apply_scenario(
         is_conversational  — True for greetings/small-talk
         meta               — intent metadata (None for conversational)
     """
+    max_periods = max(1, len(baseline_forecast))
 
     # ── Conversational branch ─────────────────────────────────────────────────
     if _is_conversational(question):
@@ -272,7 +309,23 @@ def apply_scenario(
     # ── Standard increase / decrease branch ──────────────────────────────────
     pct      = extract_percentage(question)
     intent   = detect_intent(question)
-    duration = extract_duration(question)
+    duration = extract_duration(question, max_periods)
+
+    # Check if duration was capped
+    note = None
+    match = re.search(r"(\d+)\s*(week|weeks)", question.lower())
+    if match and int(match.group(1)) > max_periods:
+        note = f"Duration was capped at {max_periods} weeks (forecast horizon limit)"
+
+    # Handle missing percentage — use default 10%
+    used_default = False
+    if pct is None and intent in ("increase", "decrease"):
+        pct = 0.10
+        used_default = True
+        if note:
+            note += " | Used default 10% change (no percentage detected)"
+        else:
+            note = "Used default 10% change (no percentage detected)"
 
     if intent == "increase":
         multiplier = 1.0 + pct
@@ -299,8 +352,10 @@ def apply_scenario(
         "summary":           None,
         "is_conversational": False,
         "meta": {
-            "intent":     intent,
-            "percentage": pct,
-            "duration":   duration,
+            "intent":         intent,
+            "percentage":     pct,
+            "duration":       duration,
+            "note":           note,
+            "used_default_pct": used_default,
         },
     }

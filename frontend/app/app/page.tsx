@@ -5,15 +5,18 @@
  * Wired to real API via DataContext. Shows live Prophet forecast data.
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { Download } from "lucide-react";
 import { AppTopbar } from "@/components/forecastiq/app-topbar";
 import { StatCard } from "@/components/forecastiq/stat-card";
 import { InsightCard } from "@/components/forecastiq/insight-card";
 import { ForecastChart } from "@/components/forecastiq/charts/forecast-chart";
 import { DataSummary } from "@/components/forecastiq/data-summary";
 import { useData } from "@/context/DataContext";
+import { cn } from "@/lib/utils";
 
 export default function ForecastPage() {
+  const [periods, setPeriods] = useState(4);
   const {
     forecastResult,
     forecastLoading,
@@ -26,17 +29,35 @@ export default function ForecastPage() {
   // Auto-run forecast on first visit so the chart is pre-populated
   useEffect(() => {
     if (!forecastResult && !forecastLoading) {
-      fetchForecast();
+      fetchForecast(periods);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [periods]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const summary = forecastResult?.summary;
+
+  // Export CSV handler
+  const handleExportCsv = () => {
+    if (!forecastResult?.forecast) return;
+    const headers = ["date", "yhat", "yhat_lower", "yhat_upper", "baseline"];
+    const rows = forecastResult.forecast.map((pt) =>
+      [pt.date, pt.yhat, pt.yhat_lower, pt.yhat_upper, pt.baseline].join(",")
+    );
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `forecast_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="flex flex-col min-h-screen">
       <AppTopbar
         title="Short-Term Forecast"
-        onRunAnalysis={fetchForecast}
+        onRunAnalysis={() => fetchForecast(periods)}
+        onExportCsv={forecastResult ? handleExportCsv : undefined}
         isLoading={forecastLoading}
         dataLabel={`Data: ${csvData?.fileName ?? "demo_sales.csv"}`}
       />
@@ -51,13 +72,32 @@ export default function ForecastPage() {
               <p className="text-xs text-red-600 mt-0.5">{forecastError}</p>
             </div>
             <button
-              onClick={fetchForecast}
+              onClick={() => fetchForecast(periods)}
               className="ml-auto text-xs text-red-600 underline hover:text-red-700"
             >
               Try again
             </button>
           </div>
         )}
+
+        {/* Horizon selector */}
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Horizon:</span>
+          {[1, 2, 3, 4, 5, 6].map((w) => (
+            <button
+              key={w}
+              onClick={() => { setPeriods(w); fetchForecast(w); }}
+              className={cn(
+                "h-8 w-12 rounded-full text-sm border transition-colors",
+                periods === w
+                  ? "bg-foreground text-background border-foreground"
+                  : "border-border hover:border-foreground/50"
+              )}
+            >
+              {w}w
+            </button>
+          ))}
+        </div>
 
         {/* Stat cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
@@ -68,7 +108,7 @@ export default function ForecastPage() {
                 ? `${summary.trend_pct >= 0 ? "+" : ""}${summary.trend_pct}%`
                 : "—"
             }
-            trend="upward over 4wks"
+            trend={summary ? (summary.trend_pct >= 0 ? "upward over 4wks" : "downward over 4wks") : "upward over 4wks"}
             trendDirection={
               summary ? (summary.trend_pct >= 0 ? "up" : "down") : "neutral"
             }
@@ -97,7 +137,7 @@ export default function ForecastPage() {
                 ? `${summary.vs_baseline_pct >= 0 ? "+" : ""}${summary.vs_baseline_pct}%`
                 : "—"
             }
-            trend="above moving average"
+            trend={summary ? (summary.vs_baseline_pct >= 0 ? "above moving average" : "below moving average") : "above moving average"}
             trendDirection={
               summary
                 ? summary.vs_baseline_pct >= 0
@@ -117,6 +157,7 @@ export default function ForecastPage() {
             historical={forecastResult?.historical}
             forecast={forecastResult?.forecast}
             isDemo={isUsingDemo}
+            periods={periods}
           />
 
           <div className="space-y-6">
@@ -133,6 +174,7 @@ export default function ForecastPage() {
             />
           </div>
         </div>
+
       </div>
     </div>
   );
